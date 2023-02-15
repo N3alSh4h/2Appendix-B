@@ -1,0 +1,140 @@
+#include <Wire.h>
+
+
+// I2C address of the Arduino Nano
+#define I2C_SLAVE_ADDR 0x04
+
+// ESP32 Pins for IR Sensors
+#define IR1 33 //Left sensor
+#define IR2 4 //Left sensor
+#define IR3 2 //Middle left
+#define IR4 32 //Middle right
+#define IR5 35 //Right
+#define IR6 34 //Right
+
+int baseSpeed = 150; //EEEBot motor stable speed
+int leftMotor_speed = 0; // left motor speed
+int rightMotor_speed = 0; // right motor speed
+int servoAngle = 96; // Servo angle
+int midServo = 96; //EEEBot center steering
+
+double Setpoint = 47.5; //Setpoint located on the center of the car
+double errorSum = 0; // Sum of errors variable
+double lastError=0; //  Variable for previous error
+
+// The Distance from reference point of each sensor in mm
+float X1 = 85;
+float X2 = 70;
+float X3 = 55;
+float X4 = 40;
+float X5 = 25;
+float X6 = 10;
+
+// Calibration min and max variables
+int IR1_min, IR2_min, IR3_min, IR4_min, IR5_min, IR6_min;
+int IR1_max, IR2_max, IR3_max, IR4_max, IR5_max, IR6_max;
+
+// PID variables
+double Output;
+double Kp= 10 , Ki=0, Kd= 0;
+float K = 0.166;  //Motor speed scaling factor
+
+
+void setup() {
+  // Start the I2C communication
+  Wire.begin();
+  Serial.begin(9600);
+
+  // Set the pin modes as inputs for the sensors
+  pinMode(IR1, INPUT);
+  pinMode(IR2, INPUT);
+  pinMode(IR3, INPUT);
+  pinMode(IR4, INPUT);
+  pinMode(IR5, INPUT);
+  pinMode(IR6, INPUT);
+
+  //Sets the calibrated max and min values
+  IR1_min = 0;
+  IR2_min = 170;
+  IR3_min = 190;
+  IR4_min = 160;
+  IR5_min = 130;
+  IR6_min = 30;
+
+  IR1_max = 970;
+  IR2_max = 1790;
+  IR3_max = 1900;
+  IR4_max = 1980;
+  IR5_max = 1780;
+  IR6_max = 1000;
+
+}
+
+void loop() {
+
+  // Reads in the values from all 6 sensors
+  int new_IR1 = analogRead(IR1);
+  int new_IR2 = analogRead(IR2);
+  int new_IR3 = analogRead(IR3);
+  int new_IR4 = analogRead(IR4);
+  int new_IR5 = analogRead(IR5);
+  int new_IR6 = analogRead(IR6);
+
+  //Constrains the values to a specified range
+  new_IR1 = constrain(new_IR1, IR1_min, IR1_max);
+  new_IR2 = constrain(new_IR2, IR2_min, IR2_max);
+  new_IR3 = constrain(new_IR3, IR3_min, IR3_max);
+  new_IR4 = constrain(new_IR4, IR4_min, IR4_max);
+  new_IR5 = constrain(new_IR5, IR5_min, IR5_max);
+  new_IR6 = constrain(new_IR6, IR6_min, IR6_max);
+
+  //Maps the values into the 0 to 255 range
+  new_IR1 = map(new_IR1, IR1_min, IR1_max, 0, 255);
+  new_IR2 = map(new_IR2, IR2_min, IR2_max, 0, 255);
+  new_IR3 = map(new_IR3, IR3_min, IR3_max, 0, 255);
+  new_IR4 = map(new_IR4, IR4_min, IR4_max, 0, 255);
+  new_IR5 = map(new_IR5, IR5_min, IR5_max, 0, 255);
+  new_IR6 = map(new_IR6, IR6_min, IR6_max, 0, 255);
+
+  // Calculate the weighted average of the sensor values
+  float numerator = (new_IR1 * X1 + new_IR2 * X2 + new_IR3 * X3 + new_IR4 * X4 + new_IR5 * X5 + new_IR6 * X6);
+  float denominator = (new_IR1 + new_IR2 + new_IR3 + new_IR4 + new_IR5 + new_IR6);
+  float weightedAverage = (numerator/denominator);
+
+  //PID Control Algorithm
+  double error = Setpoint - weightedAverage;
+  errorSum = errorSum + error;
+  double dError = error - lastError;
+  Output = Kp * error + Ki * errorSum + Kd * dError;
+  lastError = error;
+
+  // Calculate the new speed and steering values
+  //Right turns are minus values
+  //Left turns are positive values
+  
+  leftMotor_speed = baseSpeed + (K * Output);
+  rightMotor_speed = baseSpeed - (K * Output);
+  servoAngle = midServo - Output;
+
+  // Constrain the values to the appropriate range
+  leftMotor_speed = constrain(leftMotor_speed, 0, 255);
+  rightMotor_speed = constrain(rightMotor_speed, 0, 255);
+  servoAngle = constrain(servoAngle, 0, 140);
+
+  //Calls the transmission function
+  ArduinoTransmission(leftMotor_speed, rightMotor_speed, servoAngle);
+}
+
+  // Send the motor speeds and servo angle to the Arduino Nano
+
+void ArduinoTransmission(int leftMotor_speed, int rightMotor_speed, int servoAngle)
+{
+ Wire.beginTransmission(I2C_SLAVE_ADDR); // transmit to device #4
+ Wire.write((byte)((leftMotor_speed & 0x0000FF00) >> 8));    // first byte of x, containing bits 16 to 9
+ Wire.write((byte)(leftMotor_speed & 0x000000FF));           // second byte of x, containing the 8 LSB - bits 8 to 1
+ Wire.write((byte)((rightMotor_speed & 0x0000FF00) >> 8));   // first byte of y, containing bits 16 to 9
+ Wire.write((byte)(rightMotor_speed & 0x000000FF));          // second byte of y, containing the 8 LSB - bits 8 to 1
+ Wire.write((byte)((servoAngle & 0x0000FF00) >> 8));    // first byte of x, containing bits 16 to 9
+ Wire.write((byte)(servoAngle & 0x000000FF));
+ Wire.endTransmission();   // stop transmitting
+}
